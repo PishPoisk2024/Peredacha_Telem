@@ -1,0 +1,133 @@
+import telnetlib
+import time
+import re
+import serial
+
+def main():
+    while True:
+        try:
+            # Устанавливаем соединение с удаленным хостом
+            tn = telnetlib.Telnet("localhost", "5038")
+            # Выводим служебную информацию
+            tn.write(b"mbts gprs list\n")
+            time.sleep(2)
+            output = tn.read_very_eager()
+
+            # Записываем результат в файл
+
+            with open("output.txt", "wb") as file:
+
+                file.write(output)
+
+            # Функция для извлечения данных из строки
+
+            def extract_data(line):
+                data = {}
+                ta_match = re.search(r'TA=(\d+)', line)
+                te_match = re.search(r'TE=\((-?\d+)', line)
+                rssi_match = re.search(r'RSSI=\((-?\d+)', line)
+                imsi_match = re.search(r'imsi=(\d+)', line)
+                rxlev_match = re.search(r'RXLev=\((-?\d+)', line)
+
+                if ta_match:
+                    data['TA'] = ta_match.group(1)
+                if te_match:
+                    data['TE'] = te_match.group(1)
+                if rssi_match:
+                    data['RSSI'] = rssi_match.group(1)
+                if imsi_match:
+                    data['imsi'] = imsi_match.group(1)
+                if rxlev_match:
+                    data['RXLev'] = rxlev_match.group(1)
+                return data
+
+            # Чтение данных из файла
+             with open("output.txt", "r") as file:
+                lines = file.readlines()
+
+
+            # Парсинг данных
+            parsed_data = []
+            current_data = {}
+            for line in lines:
+                if 'MS#' in line:
+                    if current_data:
+                        parsed_data.append(current_data)
+                        current_data = {}
+                data = extract_data(line)
+                if data:
+                    current_data.update(data)
+
+            if current_data:
+                parsed_data.append(current_data)
+
+            # Выполняем команду nipc list accepted
+            tn.write(b"nipc list accepted\n")
+            time.sleep(1)
+            nipc_output = tn.read_very_eager()
+
+            with open("nipc_output.txt", "wb") as file:
+                file.write(nipc_output)
+
+            with open ("nipc_output.txt", "r") as file:
+                nipc_lines = file.readlines()
+
+            # Функция для извлечения msisdn и imsi из строки
+            def extract_nipc_data(line):
+                data = {}
+                imsi_match = re.search(r'(\d{15})\s*\|\s*(\d+)', line)
+                if imsi_match:
+                    data['imsi'] = imsi_match.group(1)
+                    data['msisdn'] = imsi_match.group(2)
+                return data
+
+            # Парсинг данных nipc
+            nipc_data = {}
+            for line in nipc_lines:
+                data = extract_nipc_data(line)
+                if data:
+                    imsi = data.get('imsi')
+                    msisdn = data.get('msisdn')
+                    if imsi and msisdn:
+                        nipc_data[imsi] = msisdn
+
+            for entry in parsed_data:
+                imsi = entry.get('imsi')
+                if imsi in nipc_data:
+                    entry['msisdn'] = nipc_data[imsi]
+
+            ser = serial.Serial(
+                port='/dev/ttyUSB0',  # Замените на ваш UART-порт
+                baudrate=115200,        # Замените на вашу скорость передачи данных
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                bytesize=serial.EIGHTBITS,
+                timeout=1
+                )
+
+             for entry in parsed_data:
+                rssi = entry.get('RSSI', '')
+                imsi = entry.get('imsi', '')
+                rxlev = entry.get('RXLev', '')
+                ta = entry.get('TA', '')
+                te = entry.get('TE', '')
+                msisdn = entry.get('msisdn', '')
+                lat = 56.4519127
+                lon = 84.9622607
+                packet = f"{imsi} {rssi} {rxlev} {ta} {te} {lat} {lon} {msisdn}\n"
+                packet_bytes = packet.encode()
+
+                ser.write(packet_bytes)
+                print(f"Данные отправлены по UART: {packet.strip()}")
+
+            ser.close()
+            tn.close()
+
+            time.sleep(2)
+
+        except KeyboardInterrupt:
+            print("Программа завершена")
+            break
+
+if __name__ == "__main__":
+    main()
